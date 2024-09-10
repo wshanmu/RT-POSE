@@ -75,9 +75,15 @@ Yuan-Hao Ho (n28081527@gs.ncku.edu.tw), Jen-Hao(Andy) Cheng(andyhci@uw.edu)
 ## Citing RT-Pose
 
 ```tex
+@article{rtpose2024,
+      title={RT-Pose: A 4D Radar Tensor-based 3D Human Pose Estimation and Localization Benchmark}, 
+      author={Yuan-Hao Ho and Jen-Hao Cheng and Sheng Yao Kuan and Zhongyu Jiang and Wenhao Chai and Hsiang-Wei Huang and Chih-Lung Lin and Jenq-Neng Hwang},
+      journal={arXiv preprint arXiv:2407.13930},
+      year={2024}
+}
+
 
 ```
-
 
 ## Acknowlegement
 Our project could not have been accomplished without leveraging several exceptional open-source codebases. 
