@@ -33,3 +33,7 @@ munch
 tensorboard
 nuscenes-devkit
 spconv-cu117
+pycocotools
+Cython
+addict
+yacs

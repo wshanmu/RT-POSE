@@ -38,27 +38,24 @@ from collections import defaultdict
 
 
 
-def save_pred(pred, root, checkpoint_name, dataset_split):
-    with open(os.path.join('/mnt/ssd3/cruw_pose_label/file_meta_merge.txt'), 'r') as f:
-        lines = f.readlines()
-    seq_id_to_name = {}
-    for line in lines:
-        seq_id, seq_name = line.strip().split(',')
-        seq_id_to_name[seq_id] = seq_name
-
+def save_pred(pred, root, checkpoint_name, dataset_split, dataset=None):
+    seq_id_to_name = getattr(dataset, "seq_id_to_name", {}) if dataset is not None else {}
     save_pred_dir = os.path.join(root, f"{checkpoint_name}")
     os.makedirs(save_pred_dir, exist_ok=True)
     # Sort pred by seq
     result = defaultdict(dict)
     for seq_rdr_frame, val in pred.items():
         seq, frame, rdr_frame = seq_rdr_frame.split('/')
-        result[seq_id_to_name[seq]][f'{frame}_{rdr_frame}'] = val
+        result[seq_id_to_name.get(seq, seq)][f'{frame}_{rdr_frame}'] = val
         # workaround
         # result['2024_0218_1209'][f'{frame}_{rdr_frame}'] = val
     # sort result by seq name, and sort each seq by frame
     result = dict(sorted(result.items(), key=lambda x: x[0]))
     for seq, frames in result.items():
-        result[seq] = dict(sorted(frames.items(), key=lambda x: int(x[0].split('_')[0])))
+        def frame_sort_key(item):
+            frame_name = item[0].split('_')[0]
+            return int(frame_name) if frame_name.isdigit() else frame_name
+        result[seq] = dict(sorted(frames.items(), key=frame_sort_key))
     with open(os.path.join(save_pred_dir, f"{dataset_split}_prediction.json"), "w") as f:
         json.dump(result, f, indent=2)
 
@@ -236,7 +233,7 @@ def main():
         os.makedirs(args.work_dir)
 
     checkpoint_file_name = args.checkpoint.split('/')[-1].split('.')[0]
-    save_pred(predictions, args.work_dir, checkpoint_file_name, 'test' if args.testset else 'train')
+    save_pred(predictions, args.work_dir, checkpoint_file_name, 'test' if args.testset else 'train', dataset)
 
     result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset)
 

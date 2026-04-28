@@ -34,12 +34,25 @@ class CRUW_POSE_Dataset(Dataset):
         if self.enable_radar:
             self.rdr_path_name = 'npy_DZYX_complex' if 'd' in self.cfg.DATASET.RDR_TYPE else 'npy'
             if 'zyx_real' in self.cfg.DATASET.RDR_TYPE:
-                # Default ROI for CB (When generating CB from matlab applying interpolation)
-                self.arr_z_cb = np.arange(-5.8, 5.8, 11.6/32)
-                self.arr_y_cb = np.arange(-10.05, 10.05, 20.1/128)
-                self.arr_x_cb = np.arange(0, 11.6, 11.6/256)
+                # Default ROI for CB (When generating CB from matlab applying interpolation).
+                # Custom datasets can set DATASET.RDR_CUBE.SHAPE to describe tensors that
+                # are already cropped/resampled to DATASET.ROI.
+                rdr_cube_cfg = self.cfg.DATASET.RDR_CUBE
+                if 'SHAPE' in rdr_cube_cfg:
+                    roi_cfg = self.cfg.DATASET.ROI[self.cfg.DATASET.LABEL['ROI_TYPE']]
+                    z_shape, y_shape, x_shape = [int(v) for v in rdr_cube_cfg.SHAPE]
+                    self.arr_z_cb = np.linspace(roi_cfg['z'][0], roi_cfg['z'][1], z_shape, dtype=np.float32)
+                    self.arr_y_cb = np.linspace(roi_cfg['y'][0], roi_cfg['y'][1], y_shape, dtype=np.float32)
+                    self.arr_x_cb = np.linspace(roi_cfg['x'][0], roi_cfg['x'][1], x_shape, dtype=np.float32)
+                    self.list_roi_idx_cb = [0, z_shape - 1, 0, y_shape - 1, 0, x_shape - 1]
+                else:
+                    self.arr_z_cb = np.arange(-5.8, 5.8, 11.6/32)
+                    self.arr_y_cb = np.arange(-10.05, 10.05, 20.1/128)
+                    self.arr_x_cb = np.arange(0, 11.6, 11.6/256)
+                    self.list_roi_idx_cb = [0, len(self.arr_z_cb)-1, \
+                        0, len(self.arr_y_cb)-1, 0, len(self.arr_x_cb)-1]
                 self.is_consider_roi_rdr_cb = cfg.DATASET.RDR_CUBE.IS_CONSIDER_ROI
-                if self.is_consider_roi_rdr_cb:
+                if self.is_consider_roi_rdr_cb and 'SHAPE' not in rdr_cube_cfg:
                     self.consider_roi_cube(cfg.DATASET.ROI[cfg.DATASET.LABEL['ROI_TYPE']])
                 # self.rdr_to_real = True if 'd' in self.cfg.DATASET.RDR_TYPE else False
                 self.rdr_to_real = False
@@ -59,7 +72,12 @@ class CRUW_POSE_Dataset(Dataset):
         self.flag = np.ones(len(self), dtype=np.uint8)
 
     def read_meta(self):
-        with open(os.path.join(self.cfg.DATASET.DIR.ROOT_DIR, self.cfg.DATASET.DIR.META_FILE), 'r') as f:
+        meta_file = self.cfg.DATASET.DIR.get('META_FILE', None)
+        meta_path = os.path.join(self.cfg.DATASET.DIR.ROOT_DIR, meta_file) if meta_file else None
+        if meta_path is None or not os.path.exists(meta_path):
+            self.seq_id_to_name = {}
+            return
+        with open(meta_path, 'r') as f:
             lines = f.readlines()
         seq_id_to_name = {}
         for line in lines:
@@ -81,6 +99,7 @@ class CRUW_POSE_Dataset(Dataset):
             samples_by_seq = json.load(f)
         samples = []
         for seq, seq_frames in samples_by_seq.items():
+            self.seq_id_to_name.setdefault(seq, seq)
             # TODO: remove the below line in the future
             if self.seq_id_to_name[seq] in ['2023_0718_1642', '2023_0726_1602', '2023_0726_1619', '2023_0726_1620']:
                 continue
@@ -90,7 +109,8 @@ class CRUW_POSE_Dataset(Dataset):
                 for obj in frame_objs:
                     sample['rdr_frame'] = obj['Radar_frameID']
                     sample['frame'] = frame
-                    sample['poses'] = [obj['pose']]
+                    pose = obj.get('pose', [])
+                    sample['poses'] = [pose] if len(pose) > 0 else []
                     samples.append(sample)
         self.samples = samples
 
@@ -167,7 +187,12 @@ class CRUW_POSE_Dataset(Dataset):
     def get_cube(self, seq, rdr_frame_id):
         # workaround for infferencing a directory
         # arr_cube = np.load(os.path.join('/mnt/ssd3/cruw_pose', '2024_0218_1209', 'DZYX_npy_f16', f'{rdr_frame_id}.npy')).astype(np.float32)
-        arr_cube = np.load(os.path.join('/mnt/ssd3/cruw_pose', self.seq_id_to_name[seq], 'DZYX_npy_f16', f'{rdr_frame_id}.npy')).astype(np.float32)
+        radar_root = self.cfg.DATASET.DIR.get('RADAR_ROOT_DIR', self.cfg.DATASET.DIR.ROOT_DIR)
+        radar_npy_dir = self.cfg.DATASET.DIR.get('RADAR_NPY_DIR', 'DZYX_npy_f16')
+        cube_path = os.path.join(radar_root, self.seq_id_to_name[seq], radar_npy_dir, f'{rdr_frame_id}.npy')
+        if not os.path.exists(cube_path):
+            cube_path = os.path.join(radar_root, radar_npy_dir, f'{rdr_frame_id}.npy')
+        arr_cube = np.load(cube_path).astype(np.float32)
         # if self.rdr_to_real:
         #     arr_cube = np.abs(arr_cube)
         norm_vals = [float(norm_val) for norm_val in self.rad_normalize_values]
@@ -186,7 +211,12 @@ class CRUW_POSE_Dataset(Dataset):
 
 
     def get_cube_phase(self, seq, rdr_frame_id):
-        arr_cube = np.load(os.path.join('/mnt/ssd3/cruw_pose', self.seq_id_to_name[seq], 'DZYX_npy_f16_complex', f'{rdr_frame_id}.npy')).astype(np.float32)
+        radar_root = self.cfg.DATASET.DIR.get('RADAR_ROOT_DIR', self.cfg.DATASET.DIR.ROOT_DIR)
+        radar_npy_dir = self.cfg.DATASET.DIR.get('RADAR_PHASE_NPY_DIR', 'DZYX_npy_f16_complex')
+        cube_path = os.path.join(radar_root, self.seq_id_to_name[seq], radar_npy_dir, f'{rdr_frame_id}.npy')
+        if not os.path.exists(cube_path):
+            cube_path = os.path.join(radar_root, radar_npy_dir, f'{rdr_frame_id}.npy')
+        arr_cube = np.load(cube_path).astype(np.float32)
         # RoI selection
         idx_z_min, idx_z_max, idx_y_min, idx_y_max, idx_x_min, idx_x_max = self.list_roi_idx_cb
         arr_cube = arr_cube[:, :, idx_z_min:idx_z_max+1,idx_y_min:idx_y_max+1,idx_x_min:idx_x_max+1]
@@ -302,7 +332,8 @@ class CRUW_POSE_Dataset(Dataset):
         total_results = {}
         total_results['MPJPE'] = np.mean([v['MPJPE'] for k, v in seq_res.items()])
         total_results['ABS_MPJPE'] = np.mean([v['ABS_MPJPE'] for k, v in seq_res.items()])
-        for i in range(15):
+        num_joints = next(iter(seq_mpjpe.values()))[0].shape[0] if len(seq_mpjpe) > 0 else 0
+        for i in range(num_joints):
             total_results[f'PJPE_{i}'] = np.mean([v[f'PJPE_{i}'] for k, v in seq_res.items()])
             total_results[f'ABS_PJPE_{i}'] = np.mean([v[f'ABS_PJPE_{i}'] for k, v in seq_res.items()])
         res['results'] = total_results

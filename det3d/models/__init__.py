@@ -1,9 +1,9 @@
 import importlib
+import os
 spconv_spec = importlib.util.find_spec("spconv")
-found = spconv_spec is not None
-if found:
-    from .backbones import *  # noqa: F401,F403
-else:
+found = spconv_spec is not None and os.environ.get("RTPOSE_DISABLE_SPCONV", "0") != "1"
+from .backbones import *  # noqa: F401,F403
+if not found:
     print("No spconv, sparse convolution disabled!")
 from .pose_heads import *  # noqa: F401,F403
 from .builder import (
@@ -29,7 +29,13 @@ from .registry import (
     FEAT_TRANSFORMS
 )
 from .second_stage import * 
-from .roi_heads import * 
+if os.environ.get("RTPOSE_DISABLE_IOU3D", "0") == "1":
+    print("ROI heads disabled: RTPOSE_DISABLE_IOU3D=1")
+else:
+    try:
+        from .roi_heads import * 
+    except ImportError as e:
+        print(f"ROI heads disabled: {e}")
 
 __all__ = [
     "READERS",

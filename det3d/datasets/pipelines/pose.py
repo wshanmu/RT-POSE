@@ -156,9 +156,10 @@ class AssignLabelPose(object):
         self.cfg = assigner_cfg
 
     def __call__(self, res, info):
-        max_poses = self._max_poses
-        max_points = max_poses * 15
         class_names_by_task = [t.class_names for t in self.tasks]
+        num_keypoints = int(getattr(self.cfg, "num_keypoints", sum(len(names) for names in class_names_by_task)))
+        max_poses = self._max_poses
+        max_points = max_poses * num_keypoints
         rdr_res, lidar_res = None, None
         if 'rdr_cube' in res:
             rdr_res = {}
@@ -210,11 +211,11 @@ class AssignLabelPose(object):
                     hm = np.zeros((len(class_names_by_task[idx]), feature_map_size[0], feature_map_size[1], feature_map_size[2])
                                 ,dtype=np.float32)
                     # [reg]
-                    anno_pose = np.zeros((max_points, 3), dtype=np.float32) # each pose has 15 keypoints
+                    anno_pose = np.zeros((max_points, 3), dtype=np.float32)
                     ind = np.zeros((max_points), dtype=np.int64)
                     mask = np.zeros((max_points), dtype=np.uint8)
                     cat = np.zeros((max_points), dtype=np.int64)
-                    num_points = min(len(gt_pose_task)*15, max_points)  
+                    num_points = min(len(gt_pose_task), max_points)
                     for k in range(num_points):
                         cls_id = gt_pose_task[k][0]
                         # hard code the l, w, h  by taking factor of voxel size closest to multiple of 2
@@ -287,11 +288,11 @@ class AssignLabelPose(object):
                     hm = np.zeros((len(class_names_by_task[idx]), feature_map_size[0], feature_map_size[1], feature_map_size[2])
                                 ,dtype=np.float32)
                     # [reg]
-                    anno_pose = np.zeros((max_points, 3), dtype=np.float32) # each pose has 15 keypoints
+                    anno_pose = np.zeros((max_points, 3), dtype=np.float32)
                     ind = np.zeros((max_points), dtype=np.int64)
                     mask = np.zeros((max_points), dtype=np.uint8)
                     cat = np.zeros((max_points), dtype=np.int64)
-                    num_points = min(len(gt_pose_task)*15, max_points)  
+                    num_points = min(len(gt_pose_task), max_points)
                     for k in range(num_points):
                         cls_id = gt_pose_task[k][0]
                         # hard code the l, w, h  by taking factor of voxel size closest to multiple of 2
@@ -355,6 +356,7 @@ class AssignLabelPose2(object):
         self._min_radius = assigner_cfg.min_radius
         self._consider_radar_visibility = getattr(assigner_cfg, "consider_radar_visibility", False)
         self.cfg = assigner_cfg
+        self.num_keypoints = int(getattr(assigner_cfg, "num_keypoints", 15))
 
     def __call__(self, res, info):
         max_poses = self._max_poses
@@ -393,13 +395,14 @@ class AssignLabelPose2(object):
                 gt_classnames = []
                 gt_points_by_task = [[] for _ in range(len(self.tasks))] # [[[sub_class_id, 15 key points' xyz]], [],  ...]
                 for pose in res['poses']:
-                    pose_gt  =[]
-                    for pt_idx, pose_xyz in enumerate(pose):
-                        if pt_idx == 0:
-                            gt_classnames.append(class_names_by_task[0][pt_idx])
-                            pose_gt += [pt_idx] # hardcode the task type here
-                        pose_gt += pose_xyz
-                    gt_points_by_task[0].append(pose_gt) # hardcode the task index here, should remove this in the future version
+                    if len(pose) == 0:
+                        continue
+                    pose_gt = [0] # hardcode the one-heatmap task type here
+                    for pose_xyz in pose[:self.num_keypoints]:
+                        pose_gt += list(pose_xyz[:3])
+                    if len(pose_gt) == self.num_keypoints * 3 + 1:
+                        gt_classnames.append(class_names_by_task[0][0])
+                        gt_points_by_task[0].append(pose_gt) # hardcode the task index here, should remove this in the future version
                 draw_gaussian = draw_gaussian3D
                 # draw_gaussian = draw_point3D
 
@@ -410,7 +413,7 @@ class AssignLabelPose2(object):
                     hm = np.zeros((len(class_names_by_task[idx]), feature_map_size[0], feature_map_size[1], feature_map_size[2])
                                 ,dtype=np.float32)
                     # [reg]
-                    anno_pose = np.zeros((max_points, 45), dtype=np.float32) # each pose has 15 keypoints
+                    anno_pose = np.zeros((max_points, self.num_keypoints * 3), dtype=np.float32)
                     ind = np.zeros((max_points), dtype=np.int64)
                     mask = np.zeros((max_points), dtype=np.uint8)
                     cat = np.zeros((max_points), dtype=np.int64)
@@ -421,6 +424,8 @@ class AssignLabelPose2(object):
                         # radius = max(self._min_radius, int(radius))
 
                         keypoints_xyz = gt_pose_task[k][1:]
+                        if len(keypoints_xyz) != self.num_keypoints * 3:
+                            continue
                         ct = []
                         for i in range(int(len(keypoints_xyz)/3)):
                             x, y, z = keypoints_xyz[i*3:3*(i+1)] # center's xyz
@@ -484,7 +489,7 @@ class AssignLabelPose2(object):
                     hm = np.zeros((len(class_names_by_task[idx]), feature_map_size[0], feature_map_size[1], feature_map_size[2])
                                 ,dtype=np.float32)
                     # [reg]
-                    anno_pose = np.zeros((max_points, 3), dtype=np.float32) # each pose has 15 keypoints
+                    anno_pose = np.zeros((max_points, 3), dtype=np.float32)
                     ind = np.zeros((max_points), dtype=np.int64)
                     mask = np.zeros((max_points), dtype=np.uint8)
                     cat = np.zeros((max_points), dtype=np.int64)

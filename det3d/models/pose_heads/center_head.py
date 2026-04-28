@@ -351,7 +351,7 @@ class CenterHead(nn.Module):
                 key_pts_pose = pts_preds[ind].cpu().tolist()
                 if center_score > test_cfg.score_threshold:
                     predicted_key_points.append((0, *key_pts_pose[:3], center_score))
-                for i in range(1, 15):
+                for i in range(1, num_keypoints_reg):
                     predicted_key_points.append((i, *key_pts_pose[3*i:3*(i+1)], center_score))
 
             # TODO: add more post-processing

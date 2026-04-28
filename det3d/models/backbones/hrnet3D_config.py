@@ -176,6 +176,13 @@ HRNET3D_Tiny_Feat64_zyx_l4_IN64.STAGE4.NUM_CHANNELS = [64, 64, 128, 128]
 HRNET3D_Tiny_Feat64_zyx_l4_IN64.STAGE4.BLOCK = "ResNetBlock"
 HRNET3D_Tiny_Feat64_zyx_l4_IN64.STAGE4.FUSE_METHOD = "SUM"
 
+HRNET3D_Tiny_Feat128_zyx_l4_IN128 = HRNET3D_Tiny_Feat64_zyx_l4_IN64.clone()
+HRNET3D_Tiny_Feat128_zyx_l4_IN128.LAYER1.INPLANES = 128
+HRNET3D_Tiny_Feat128_zyx_l4_IN128.STAGE2.INPLANES = 128
+HRNET3D_Tiny_Feat128_zyx_l4_IN128.STAGE2.NUM_CHANNELS = [128, 128]
+HRNET3D_Tiny_Feat128_zyx_l4_IN128.STAGE3.NUM_CHANNELS = [128, 128, 256]
+HRNET3D_Tiny_Feat128_zyx_l4_IN128.STAGE4.NUM_CHANNELS = [128, 128, 256, 256]
+
 
 MODEL_CONFIGS = {
     "hr_tiny_feat32": HRNET3D_Tiny_Feat32,
@@ -183,5 +190,6 @@ MODEL_CONFIGS = {
     "hr_tiny_feat16_zyx_l4": HRNET3D_Tiny_Feat16_zyx_l4,
     "hr_tiny_feat32_zyx_l4": HRNET3D_Tiny_Feat32_zyx_l4,
     "hr_tiny_feat32_zyx_l4_in32": HRNET3D_Tiny_Feat32_zyx_l4_IN32,
-    "hr_tiny_feat64_zyx_l4_in64": HRNET3D_Tiny_Feat64_zyx_l4_IN64
+    "hr_tiny_feat64_zyx_l4_in64": HRNET3D_Tiny_Feat64_zyx_l4_IN64,
+    "hr_tiny_feat128_zyx_l4_in128": HRNET3D_Tiny_Feat128_zyx_l4_IN128,
 }

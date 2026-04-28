@@ -77,7 +77,8 @@ def parse_second_losses(losses):
     for loss_name, loss_value in losses.items():
         if loss_name == "loc_loss_elem":
             for idx_l, loss_item in enumerate(loss_value[0]):
-                log_vars[loc_loss_elem_names[idx_l]] = loss_item.item()
+                loss_elem_name = loc_loss_elem_names[idx_l] if idx_l < len(loc_loss_elem_names) else f'coor_offset_{idx_l}'
+                log_vars[loss_elem_name] = loss_item.item()
         elif loss_name in ['num_pos', 'num_neg']:
             log_vars[loss_name] = loss_value
         elif loss_name == 'jde_loss':

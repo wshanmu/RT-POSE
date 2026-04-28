@@ -1,13 +1,18 @@
 import math
+import os
 from functools import reduce
 
 import numpy as np
 import torch
 from torch import stack as tstack
-try:
-    from det3d.ops.iou3d_nms import iou3d_nms_cuda, iou3d_nms_utils
-except:
-    print("iou3d cuda not built. You don't need this if you use circle_nms. Otherwise, refer to the advanced installation part to build this cuda extension")
+if os.environ.get("RTPOSE_DISABLE_IOU3D", "0") == "1":
+    iou3d_nms_cuda, iou3d_nms_utils = None, None
+else:
+    try:
+        from det3d.ops.iou3d_nms import iou3d_nms_cuda, iou3d_nms_utils
+    except Exception:
+        iou3d_nms_cuda, iou3d_nms_utils = None, None
+        print("iou3d cuda not built. You don't need this if you use circle_nms. Otherwise, refer to the advanced installation part to build this cuda extension")
 
 def torch_to_np_dtype(ttype):
     type_map = {

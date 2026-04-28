@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 import numba
 import numpy as np
@@ -6,10 +7,14 @@ from det3d.core.bbox.geometry import (
     points_count_convex_polygon_3d_jit,
     points_in_convex_polygon_3d_jit,
 )
-try:
-    from spconv.utils import rbbox_intersection, rbbox_iou
-except:
-    print("Import spconv fail, no support for sparse convolution!")
+if os.environ.get("RTPOSE_DISABLE_SPCONV", "0") == "1":
+    rbbox_intersection, rbbox_iou = None, None
+else:
+    try:
+        from spconv.utils import rbbox_intersection, rbbox_iou
+    except Exception:
+        rbbox_intersection, rbbox_iou = None, None
+        print("Import spconv fail, no support for sparse convolution!")
 
 
 def points_count_rbbox(points, rbbox, z_axis=2, origin=(0.5, 0.5, 0.5)):

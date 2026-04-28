@@ -41,16 +41,25 @@ open_mmlab_model_urls = {
 import torch.nn as nn 
 from typing import Set
 
-try:
-    import spconv.pytorch as spconv
-except:
-    import spconv as spconv
+if os.environ.get("RTPOSE_DISABLE_SPCONV", "0") == "1":
+    spconv = None
+else:
+    try:
+        import spconv.pytorch as spconv
+    except Exception:
+        try:
+            import spconv as spconv
+        except Exception as e:
+            spconv = None
+            print(f"spconv checkpoint compatibility disabled: {e}")
 
 def find_all_spconv_keys(model: nn.Module, prefix="") -> Set[str]:
     """
     Finds all spconv keys that need to have weight's transposed
     from https://github.com/acivgin1/OpenPCDet/blob/8fc1a5d57bcb418d71d5118fb3df4b58d4ea0244/pcdet/utils/spconv_utils.py
     """
+    if spconv is None:
+        return set()
     found_keys: Set[str] = set()
     for name, child in model.named_children():
         new_prefix = f"{prefix}.{name}" if prefix != "" else name
