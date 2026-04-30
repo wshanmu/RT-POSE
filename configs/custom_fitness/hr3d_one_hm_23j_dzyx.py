@@ -1,7 +1,7 @@
 import itertools
 import numpy as np
 
-BATCH_SIZE = 1
+BATCH_SIZE = 64
 NUM_KEYPOINTS = 23
 
 tasks = [
@@ -32,16 +32,16 @@ DATASET = dict(
   RDR_CUBE=dict(
       IS_CONSIDER_ROI=True,
       ROI_TYPE='roi1',
-      SHAPE=[16, 4, 64],
-      GRID_SIZE=[2.0 / 63.0, 2.5 / 3.0, 2.55 / 15.0], # [x, y, z]
-      NORMALIZING_VALUE=(0.0, 1.0),
+      SHAPE=[16, 8, 64],
+      GRID_SIZE=[2.0 / 63.0, 2.5 / 7.0, 2.55 / 15.0], # [x, y, z]
+      NORMALIZING_VALUE=(0.0, 16.0),  # after log1p; log1p(600k) ≈ 13.3
   ),
   DZYX=dict(
     IS_CONSIDER_ROI=True,
     ROI_TYPE='roi1',
-    SHAPE=[16, 4, 64],
-    GRID_SIZE=[2.0 / 63.0, 2.5 / 3.0, 2.55 / 15.0], # [x, y, z]
-    NORMALIZING_VALUE=(0.0, 1.0),
+    SHAPE=[16, 8, 64],
+    GRID_SIZE=[2.0 / 63.0, 2.5 / 7.0, 2.55 / 15.0], # [x, y, z]
+    NORMALIZING_VALUE=(0.0, 16.0),  # after log1p; log1p(600k) ≈ 13.3
     REDUCE_TYPE='none',
   ),
   ENABLE_SENSOR=['RADAR'],
@@ -109,7 +109,7 @@ test_cfg = dict(
         nms_post_max_size=1,
         nms_iou_threshold=0.1,
     ),
-    score_threshold=0.0,
+    score_threshold=-1.0,
     pc_range=[test_cfg_range['x'][0], test_cfg_range['y'][0], test_cfg_range['z'][0]],
     out_size_factor=out_size_factor,
     voxel_size=DATASET['DZYX']['GRID_SIZE'],

@@ -108,9 +108,15 @@ def batch_processor(model, data, train_mode, **kwargs):
         losses = model(example, return_loss=True)
         loss, log_vars = parse_second_losses(losses)
 
-        outputs = dict(
-            loss=loss, log_vars=log_vars, num_samples=len(example["anchors"][0])
-        )
+        # "anchors" key only exists in the original det3d detection datasets.
+        # For radar-pose (radar-only) batches the top-level keys are "rdr" and "meta";
+        # fall back to reading the batch size from the radar tensor.
+        try:
+            num_samples = len(example["anchors"][0])
+        except (KeyError, IndexError):
+            rdr_t = example.get("rdr", {}).get("rdr_tensor")
+            num_samples = int(rdr_t.shape[0]) if rdr_t is not None else 1
+        outputs = dict(loss=loss, log_vars=log_vars, num_samples=num_samples)
         return outputs
     else:
         return model(example, return_loss=False)
@@ -266,7 +272,7 @@ def train_detector(model, dataset, cfg, distributed=False, validate=False, logge
     total_steps = cfg.total_epochs * len(data_loaders[0])
     # print(f"total_steps: {total_steps}")
     if distributed:
-        model = apex.parallel.convert_syncbn_model(model)
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     if cfg.lr_config.type == "one_cycle":
         # build trainer
         optimizer = build_one_cycle_optimizer(model, cfg.optimizer)
@@ -308,6 +314,11 @@ def train_detector(model, dataset, cfg, distributed=False, validate=False, logge
 
     if distributed:
         trainer.register_hook(DistSamplerSeedHook())
+
+    if hasattr(cfg, "_wandb_hook"):
+        trainer.register_hook(cfg._wandb_hook)
+    if hasattr(cfg, "_eval_hook"):
+        trainer.register_hook(cfg._eval_hook)
 
     # # register eval hooks
     # if validate:

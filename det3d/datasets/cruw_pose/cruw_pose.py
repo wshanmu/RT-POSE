@@ -203,7 +203,13 @@ class CRUW_POSE_Dataset(Dataset):
             arr_cube = arr_cube[:, idx_z_min:idx_z_max+1,idx_y_min:idx_y_max+1,idx_x_min:idx_x_max+1]
         else:
             arr_cube = arr_cube[idx_z_min:idx_z_max+1,idx_y_min:idx_y_max+1,idx_x_min:idx_x_max+1]
-        # normalize
+        # Compress dynamic range with log1p before linear scaling.
+        # Raw magnitudes from FFT + beamforming reach ~1e5-1e6; log1p maps them
+        # to ~[0, 14], then NORMALIZING_VALUE=(0.0, 14.0) scales to [0, 1].
+        arr_cube = np.log1p(arr_cube)
+        # print(f"Raw cube stats: min={arr_cube.min():.3f}, max={arr_cube.max():.3f}, mean={arr_cube.mean():.3f}")
+        # print(f"Using norm_start={norm_start} and norm_scale={norm_scale} for normalization.")
+        # exit(0)
         arr_cube = (arr_cube - norm_start) / norm_scale
         arr_cube[arr_cube < 0.] = 0.
 
@@ -311,11 +317,23 @@ class CRUW_POSE_Dataset(Dataset):
         seq_abs_mpjpe = defaultdict(list) # each element is 1d np array of absmpjpe for each keypoint
         for seq_frame_rdr_frame, val in detections.items():
             seq, frame, rdr_frame = seq_frame_rdr_frame.split('/')
-            gt_points = gt[seq][frame][0]['pose']
-            keypoints = [point[1:4] for point in val['keypoints']]
+            raw_pose = gt[seq][frame][0]['pose']
+            if not raw_pose:
+                continue
+            gt_points = np.array(raw_pose, dtype=np.float32)   # (N_gt, 3)
+            if gt_points.ndim != 2 or gt_points.shape[1] != 3:
+                print(f"Invalid GT pose format for {seq_frame_rdr_frame}, expected (N_gt, 3) but got {gt_points.shape}")
+                continue
+            n_gt = gt_points.shape[0]
+            # Build pred array indexed by joint ID; fill missing joints with GT so error = 0
+            pred_points = gt_points.copy()
+            for point in val['keypoints']:
+                jid = int(point[0])
+                if jid < n_gt:
+                    pred_points[jid] = point[1:4]
 
-            seq_mpjpe[seq].append(PJPE(np.array(keypoints), np.array(gt_points)))
-            seq_abs_mpjpe[seq].append(ABS_PJPE(np.array(keypoints), np.array(gt_points)))
+            seq_mpjpe[seq].append(PJPE(pred_points.copy(), gt_points.copy()))
+            seq_abs_mpjpe[seq].append(ABS_PJPE(pred_points, gt_points))
         seq_res = {}
         for seq, mpjpes in seq_mpjpe.items():
             seq_res[self.seq_id_to_name[seq]] = {}
@@ -323,19 +341,19 @@ class CRUW_POSE_Dataset(Dataset):
             abs_mpjpes = np.array(seq_abs_mpjpe[seq])
             mpjpes_per_joint = np.mean(mpjpes, axis=0) * 1000
             abs_mpjpes_per_joint = np.mean(abs_mpjpes, axis=0) * 1000
-            seq_res[self.seq_id_to_name[seq]]['MPJPE'] = np.mean(mpjpes_per_joint)
-            seq_res[self.seq_id_to_name[seq]]['ABS_MPJPE'] = np.mean(abs_mpjpes_per_joint)
+            seq_res[self.seq_id_to_name[seq]]['MPJPE'] = float(np.mean(mpjpes_per_joint))
+            seq_res[self.seq_id_to_name[seq]]['ABS_MPJPE'] = float(np.mean(abs_mpjpes_per_joint))
             for joint_idx in range(mpjpes_per_joint.shape[0]):
-                seq_res[self.seq_id_to_name[seq]][f'PJPE_{joint_idx}'] = mpjpes_per_joint[joint_idx]
-                seq_res[self.seq_id_to_name[seq]][f'ABS_PJPE_{joint_idx}'] = abs_mpjpes_per_joint[joint_idx]
+                seq_res[self.seq_id_to_name[seq]][f'PJPE_{joint_idx}'] = float(mpjpes_per_joint[joint_idx])
+                seq_res[self.seq_id_to_name[seq]][f'ABS_PJPE_{joint_idx}'] = float(abs_mpjpes_per_joint[joint_idx])
         res = {}
         total_results = {}
-        total_results['MPJPE'] = np.mean([v['MPJPE'] for k, v in seq_res.items()])
-        total_results['ABS_MPJPE'] = np.mean([v['ABS_MPJPE'] for k, v in seq_res.items()])
+        total_results['MPJPE'] = float(np.mean([v['MPJPE'] for k, v in seq_res.items()]))
+        total_results['ABS_MPJPE'] = float(np.mean([v['ABS_MPJPE'] for k, v in seq_res.items()]))
         num_joints = next(iter(seq_mpjpe.values()))[0].shape[0] if len(seq_mpjpe) > 0 else 0
         for i in range(num_joints):
-            total_results[f'PJPE_{i}'] = np.mean([v[f'PJPE_{i}'] for k, v in seq_res.items()])
-            total_results[f'ABS_PJPE_{i}'] = np.mean([v[f'ABS_PJPE_{i}'] for k, v in seq_res.items()])
+            total_results[f'PJPE_{i}'] = float(np.mean([v[f'PJPE_{i}'] for k, v in seq_res.items()]))
+            total_results[f'ABS_PJPE_{i}'] = float(np.mean([v[f'ABS_PJPE_{i}'] for k, v in seq_res.items()]))
         res['results'] = total_results
         seq_res['ALL'] = total_results
         res['seq_results'] = seq_res

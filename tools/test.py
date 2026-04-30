@@ -88,6 +88,8 @@ def parse_args():
     parser.add_argument("--speed_test", action="store_true")
     parser.add_argument("--local_rank", type=int, default=0)
     parser.add_argument("--testset", action="store_true")
+    parser.add_argument("--batch-size", type=int, default=2048,
+                        help="override cfg.data.samples_per_gpu for inference")
 
     args = parser.parse_args()
     if "LOCAL_RANK" not in os.environ:
@@ -146,6 +148,8 @@ def main():
         print("Use Val Set")
         dataset = build_dataset(cfg.data.val)
 
+    if args.batch_size is not None:
+        cfg.data.samples_per_gpu = args.batch_size
     data_loader = build_dataloader(
         dataset,
         batch_size=cfg.data.samples_per_gpu if not args.speed_test else 1,

@@ -15,4 +15,8 @@ data['train']['label_file'] = os.environ.get('RTPOSE_TRAIN_LABEL', 'splits/train
 data['val']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'splits/eval_sessions.json')
 data['test']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'splits/eval_sessions.json')
 
+# data['train']['label_file'] = os.environ.get('RTPOSE_TRAIN_LABEL', 'splits/Train.json')
+# data['val']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'splits/Train.json')
+# data['test']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'splits/Train.json')
+
 work_dir = './work_dirs/custom_fitness_leaveout'

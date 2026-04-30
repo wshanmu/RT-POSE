@@ -433,11 +433,15 @@ class AssignLabelPose2(object):
                             ct.append((y - radar_range[1]) / voxel_size[1] / self.out_size_factor[1])
                             ct.append((z - radar_range[0]) / voxel_size[2] / self.out_size_factor[0])
                         ct = np.array(ct, dtype=np.float32)
-                        ct_int = ct.astype(np.int32)[:3]
+                        # Use hip midpoint (joints 11=LHip, 12=RHip) as the heatmap anchor.
+                        # In the original RT-Pose dataset joint 0 was the Pelvis, but this
+                        # dataset uses COCO order where joint 0 is the Nose.  The hip midpoint
+                        # is the correct body-centre for stable offset regression.
+                        ct_int = ((ct[11*3:11*3+3] + ct[12*3:12*3+3]) / 2.0).astype(np.int32)
                         # throw out not in range objects to avoid out of array area when creating the heatmap
                         if not (0 <= ct_int[0] < feature_map_size[2] and 0 <= ct_int[1] < feature_map_size[1]\
                                 and 0 <= ct_int[2] < feature_map_size[0]):
-                            continue 
+                            continue
                         draw_gaussian(hm[cls_id], ct_int, radius)
                         new_idx = k
                         x, y, z = ct_int[0], ct_int[1], ct_int[2]
