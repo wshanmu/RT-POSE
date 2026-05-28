@@ -5,8 +5,7 @@ import os
 # /home/shanmu/Projects/ai-fitness-coach/ssd_datas/fitness_data/synchronized
 DATASET['DIR']['ROOT_DIR'] = os.environ.get('RTPOSE_DATA_ROOT', '.')
 DATASET['DIR']['RADAR_ROOT_DIR'] = DATASET['DIR']['ROOT_DIR']
-DATASET['DIR']['RADAR_NPY_DIR'] = 'DZYX_npy_f16'
-# DATASET['DIR']['RADAR_NPY_DIR'] = 'DEAR_npy_f16'
+DATASET['DIR']['RADAR_NPY_DIR'] = 'DZYX_npy_f16_all2p5m'
 
 data['train']['cfg']['DATASET'] = DATASET
 data['val']['cfg']['DATASET'] = DATASET
@@ -16,9 +15,8 @@ data['train']['label_file'] = os.environ.get('RTPOSE_TRAIN_LABEL', 'splits/train
 data['val']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'splits/eval_sessions.json')
 data['test']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'splits/eval_sessions.json')
 
-# data['train']['label_file'] = os.environ.get('RTPOSE_TRAIN_LABEL', 'boelter_closer_session_ft_1/Train.json')
-# data['val']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'boelter_closer_session_ft_1/Train.json')
-# data['test']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'boelter_closer_session_ft_1/Train.json')
+# data['train']['label_file'] = os.environ.get('RTPOSE_TRAIN_LABEL', 'splits/Train.json')
+# data['val']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'splits/Train.json')
+# data['test']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'splits/Train.json')
 
-load_from = "work_dirs/hr3d_one_hm_23j_dzyx_leaveout/20260429_165334/epoch_35.pth"
-work_dir = './work_dirs/custom_fitness_leaveout/'
+work_dir = './work_dirs/custom_fitness_leaveout'

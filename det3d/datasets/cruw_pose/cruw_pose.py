@@ -24,6 +24,14 @@ class CRUW_POSE_Dataset(Dataset):
         self.split = split
         self.class_names = class_names
         self.cfg.update(class_names=class_names)
+        temporal_cfg = cfg.DATASET.get('TEMPORAL', {})
+        self.temporal_enabled = bool(temporal_cfg.get('ENABLED', False))
+        self.temporal_window_size = int(temporal_cfg.get('WINDOW_SIZE', 1))
+        self.temporal_pad_mode = temporal_cfg.get('PAD_MODE', 'repeat_first')
+        if self.temporal_window_size < 1:
+            raise ValueError('DATASET.TEMPORAL.WINDOW_SIZE must be >= 1')
+        if self.temporal_pad_mode != 'repeat_first':
+            raise ValueError("Only DATASET.TEMPORAL.PAD_MODE='repeat_first' is supported")
         self.enable_lidar, self.enable_radar = False, False 
         for sensor in cfg.DATASET.ENABLE_SENSOR:
             if sensor == 'LIDAR':
@@ -113,6 +121,7 @@ class CRUW_POSE_Dataset(Dataset):
                     sample['poses'] = [pose] if len(pose) > 0 else []
                     samples.append(sample)
         self.samples = samples
+        self._build_temporal_index()
 
         # workaround for infferencing a directory
         # samples = []
@@ -124,6 +133,31 @@ class CRUW_POSE_Dataset(Dataset):
         #     sample['poses'] = []
         #     samples.append(sample)
         # self.samples = samples
+
+    @staticmethod
+    def _frame_sort_key(frame_id):
+        frame_str = str(frame_id)
+        try:
+            return (0, int(frame_str))
+        except ValueError:
+            return (1, frame_str)
+
+    def _build_temporal_index(self):
+        self.sample_indices_by_seq = defaultdict(list)
+        self.sample_pos_in_seq = {}
+        for idx, sample in enumerate(self.samples):
+            self.sample_indices_by_seq[sample['seq']].append(idx)
+
+        for seq, indices in self.sample_indices_by_seq.items():
+            indices.sort(
+                key=lambda idx: (
+                    self._frame_sort_key(self.samples[idx]['rdr_frame']),
+                    self._frame_sort_key(self.samples[idx]['frame']),
+                    idx,
+                )
+            )
+            for pos, sample_idx in enumerate(indices):
+                self.sample_pos_in_seq[sample_idx] = pos
 
     def consider_roi_polar(self, roi_polar, is_reflect_to_cfg=True):
         self.list_roi_idx = []
@@ -215,6 +249,24 @@ class CRUW_POSE_Dataset(Dataset):
 
         return arr_cube
 
+    def get_temporal_cube(self, sample_idx):
+        sample = self.samples[sample_idx]
+        seq_indices = self.sample_indices_by_seq[sample['seq']]
+        pos = self.sample_pos_in_seq[sample_idx]
+        window_indices = []
+        first_pos = 0
+        for offset in range(self.temporal_window_size - 1, -1, -1):
+            src_pos = pos - offset
+            if src_pos < first_pos:
+                src_pos = first_pos
+            window_indices.append(seq_indices[src_pos])
+
+        cubes = [
+            self.get_cube(self.samples[idx]['seq'], self.samples[idx]['rdr_frame'])
+            for idx in window_indices
+        ]
+        return np.stack(cubes, axis=0)
+
 
     def get_cube_phase(self, seq, rdr_frame_id):
         radar_root = self.cfg.DATASET.DIR.get('RADAR_ROOT_DIR', self.cfg.DATASET.DIR.ROOT_DIR)
@@ -244,7 +296,10 @@ class CRUW_POSE_Dataset(Dataset):
         dict_item['poses'] = sample['poses']
         if self.enable_radar:
             # dict_item['rdr_cube'] = self.get_cube_phase(sample['seq'], sample['rdr_frame'])
-            dict_item['rdr_cube'] = self.get_cube(sample['seq'], sample['rdr_frame'])
+            if self.temporal_enabled:
+                dict_item['rdr_cube'] = self.get_temporal_cube(idx)
+            else:
+                dict_item['rdr_cube'] = self.get_cube(sample['seq'], sample['rdr_frame'])
             dict_item['hm_size'] = (len(self.arr_z_cb), len(self.arr_y_cb), len(self.arr_x_cb))
         if self.enable_lidar:
             dict_item['lidar_pc'] = self.get_pc(sample['seq'], sample['frame'], self.cfg.DATASET.DIR.LIDAR)

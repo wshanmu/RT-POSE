@@ -144,6 +144,7 @@ python tools/custom_make_session_split.py \
                    boelter_closer_session11 boelter_closer_session13 \
                    boelter_closer_session14 boelter_closer_session16 \
                    boelter_session17 boelter_session19 boelter_session21 \
+                   boelter_closer_session_ft_1 \
   --eval-sessions  boelter_closer_session3 boelter_closer_session6 \
                    boelter_closer_session9 boelter_closer_session12 \
                    boelter_closer_session15 boelter_session20 boelter_session18 \
@@ -196,7 +197,7 @@ CUDA_VISIBLE_DEVICES=1  \
 PYTHONPATH=. RTPOSE_DISABLE_IOU3D=1 RTPOSE_DISABLE_SPCONV=1 \
 RTPOSE_DATA_ROOT=../ssd_datas/fitness_data/synchronized \
 python tools/train.py configs/custom_fitness/hr3d_one_hm_23j_dzyx_leaveout.py \
-training.lr_max=0.0005 training.batch_size=128
+training.lr_max=0.0003 training.batch_size=128
 ```
 
 ### 5.3 Multi-GPU (torchrun)
@@ -209,6 +210,13 @@ RTPOSE_DATA_ROOT=../ssd_datas/fitness_data/synchronized \
 torchrun --nproc_per_node=4 \
   tools/train.py configs/custom_fitness/hr3d_one_hm_23j_dzyx_leaveout.py \
   --autoscale-lr
+```
+
+### Finetune the trained model with temporal module
+```bash
+RTPOSE_DISABLE_IOU3D=1 RTPOSE_DISABLE_SPCONV=1 RTPOSE_DATA_ROOT=../ssd_datas/fitness_data/synchronized RTPOSE_PRETRAINED=work_dirs/hr3d_one_hm_23j_dzyx_leaveout/20260429_165334/epoch_35.pth RTPOSE_TEMPORAL_WINDOW=5 PYTHONPATH=. /data1/shanmu/envs/py39/bin/python tools/train.py   configs/custom_fitness/hr3d_one_hm_23j_dzyx_temporal.py   training.batch_size=32   training.lr_max=0.0001 training.epochs=10
+
+RTPOSE_DISABLE_IOU3D=1 RTPOSE_DISABLE_SPCONV=1 RTPOSE_DATA_ROOT=../ssd_datas/fitness_data/synchronized RTPOSE_PRETRAINED=work_dirs/hr3d_one_hm_23j_dzyx_leaveout/20260429_165334/epoch_35.pth RTPOSE_TEMPORAL_WINDOW=5 PYTHONPATH=. torchrun --nproc_per_node=4 tools/train.py   configs/custom_fitness/hr3d_one_hm_23j_dzyx_temporal.py   training.batch_size=32   training.lr_max=0.0001 training.epochs=10
 ```
 
 `--autoscale-lr` multiplies `lr_max` by the number of GPUs to compensate for
@@ -305,8 +313,8 @@ cd /data1/shanmu/ai-fitness-coach/RT-POSE
 PYTHONPATH=. RTPOSE_DISABLE_IOU3D=1 RTPOSE_DISABLE_SPCONV=1 \
 python tools/visualize_session.py \
   --session-dir ../ssd_datas/fitness_data/synchronized/boelter_closer_session13 \
-  --checkpoint work_dirs/hr3d_one_hm_23j_dzyx_leaveout/20260428_203453/latest.pth \
-  --out-dir /tmp/viz_session13 --skeleton-only
+  --checkpoint ./work_dirs/hr3d_one_hm_23j_dzyx_leaveout/20260429_165334/epoch_35.pth \
+  --out-dir ./viz_session1 --skeleton-only --max-frames 20
 ```
 
 ### 7.2 Single npy frame

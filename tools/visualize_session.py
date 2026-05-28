@@ -3,9 +3,30 @@ Per-frame 3D skeleton visualization for a trained RT-Pose model.
 
 Usage — whole session:
     python tools/visualize_session.py \
-        --session-dir /path/to/synchronized/boelter_closer_session13 \
-        --checkpoint work_dirs/custom_fitness_leaveout/latest.pth \
-        --out-dir /tmp/viz_session13
+        --session-dir ../ssd_datas/fitness_data/synchronized/boelter_closer_session1 \
+        --checkpoint ./work_dirs/hr3d_one_hm_23j_dzyx_leaveout/20260429_165334/epoch_35.pth \
+        --out-dir /tmp/viz_session13 --skeleton-only --max-frames 20
+
+Usage — whole session, batched across 4 GPUs:
+    python tools/visualize_session.py \
+        --session-dir ../ssd_datas/fitness_data/synchronized/boelter_closer_session1 \
+        --checkpoint ./work_dirs/hr3d_one_hm_23j_dzyx_leaveout/20260429_165334/epoch_35.pth \
+        --out-dir /tmp/viz_session13 --skeleton-only \
+        --devices cuda:0,cuda:1,cuda:2,cuda:3 --batch-size 16
+
+Usage — smooth predictions with a zero-phase Butterworth filter:
+    python tools/visualize_session.py \
+        --session-dir ../ssd_datas/fitness_data/synchronized/boelter_closer_session1 \
+        --checkpoint ./work_dirs/hr3d_one_hm_23j_dzyx_leaveout/20260429_165334/epoch_35.pth \
+        --out-dir /tmp/viz_session13 --skeleton-only \
+        --smooth-keypoints --fps 30 --filter-cutoff-hz 7 --filter-order 4
+
+Usage — export predictions + GT for offline post-processing:
+    python tools/visualize_session.py \
+        --session-dir ../ssd_datas/fitness_data/synchronized/boelter_closer_session1 \
+        --checkpoint ./work_dirs/hr3d_one_hm_23j_dzyx_leaveout/20260429_165334/epoch_35.pth \
+        --out-dir /tmp/viz_session13 --skeleton-only \
+        --save-predictions --predictions-file /tmp/viz_session13/predictions.json
 
 Usage — single npy frame:
     python tools/visualize_session.py \
@@ -18,7 +39,10 @@ Output PNGs can be assembled into a video with ffmpeg:
 """
 
 import argparse
+import concurrent.futures
 import json
+import math
+import multiprocessing as mp
 import os
 import sys
 from pathlib import Path
@@ -113,6 +137,9 @@ ROI = {"x": (1.0, 3.0), "y": (-1.25, 1.25), "z": (-1.15, 1.40)}   # depth, later
 
 
 def _load_model(config_path, checkpoint_path, device):
+    if device.type == "cuda":
+        torch.cuda.set_device(device)
+        torch.backends.cudnn.benchmark = True
     cfg = Config.fromfile(config_path)
     # Use -1 threshold so the heatmap peak is always accepted, even when
     # sigmoid underflows to 0.0 (undertrained models with very negative logits).
@@ -124,8 +151,7 @@ def _load_model(config_path, checkpoint_path, device):
     return model, cfg
 
 
-def _infer_single_npy(npy_path, model, cfg, device, frame_id="00000", seq="unknown"):
-    """Run inference on one npy file. Returns list of (joint_id, x, y, z, score)."""
+def _preprocess_npy(npy_path, cfg):
     arr = np.load(npy_path).astype(np.float32)   # (D, Z, Y, X)
     # Must match get_cube exactly: log1p first, then linear scale to [0, 1].
     norm_start = float(cfg.DATASET.DZYX.NORMALIZING_VALUE[0])
@@ -133,16 +159,46 @@ def _infer_single_npy(npy_path, model, cfg, device, frame_id="00000", seq="unkno
     arr = np.log1p(arr)
     arr = (arr - norm_start) / norm_scale
     arr[arr < 0.0] = 0.0
+    return arr
 
-    rdr_tensor = torch.from_numpy(arr).unsqueeze(0).to(device)   # (1, D, Z, Y, X)
+
+def _infer_batch_npy(batch_items, model, cfg, device, seq="unknown"):
+    """Run inference on a batch of npy files.
+
+    Returns list of (idx, frame_id, arr, keypoints) in the same order as
+    batch_items. Each keypoint is (joint_id, x, y, z, score).
+    """
+    arrays = []
+    metas = []
+    for _, frame_id, npy_path, _ in batch_items:
+        arrays.append(_preprocess_npy(npy_path, cfg))
+        metas.append({"seq": seq, "frame": frame_id, "rdr_frame": frame_id})
+
+    rdr_tensor = torch.from_numpy(np.stack(arrays, axis=0)).to(device, non_blocking=True)
     example = {
         "rdr": {"rdr_tensor": rdr_tensor},
-        "meta": [{"seq": seq, "frame": frame_id, "rdr_frame": frame_id}],
+        "meta": metas,
     }
-    with torch.no_grad():
+    with torch.inference_mode():
         outputs = model(example, return_loss=False)
-    keypoints = outputs[0].get("keypoints", [])
-    print(np.array(keypoints).shape, keypoints[:5])  # (N, 4) with (joint_id, x, y, z) in camera coordinates
+
+    if len(outputs) != len(batch_items):
+        raise RuntimeError(
+            f"Model returned {len(outputs)} outputs for batch size {len(batch_items)}"
+        )
+
+    results = []
+    for item, arr, output in zip(batch_items, arrays, outputs):
+        idx, frame_id, _, _ = item
+        results.append((idx, frame_id, arr, output.get("keypoints", [])))
+    return results
+
+
+def _infer_single_npy(npy_path, model, cfg, device, frame_id="00000", seq="unknown"):
+    """Run inference on one npy file. Returns list of (joint_id, x, y, z, score)."""
+    batch_item = (0, frame_id, npy_path, None)
+    _, _, arr, keypoints = _infer_batch_npy([batch_item], model, cfg, device, seq)[0]
+    # print(np.array(keypoints).shape, keypoints[:5])  # (N, 4) with (joint_id, x, y, z) in camera coordinates
     return arr, keypoints
 
 
@@ -354,7 +410,8 @@ def make_frame(arr, pred_kps, gt_pose, frame_id, mpjpe_cm_val):
 
     pred_xyz = _kps_to_xyz(pred_kps)
     gt_xyz = np.array(gt_pose) if gt_pose is not None and len(gt_pose) == 23 else None
-    print(f"Found GT: {gt_xyz.shape[0]} ground truth keypoints")
+    if gt_xyz is not None:
+        print(f"Found GT: {gt_xyz.shape[0]} ground truth keypoints")
 
     fig = plt.figure(figsize=(14, 10), facecolor="#1a1a1a")
     axes = []
@@ -447,6 +504,396 @@ def make_frame(arr, pred_kps, gt_pose, frame_id, mpjpe_cm_val):
 # Main
 # ---------------------------------------------------------------------------
 
+def _iter_batches(items, batch_size):
+    batch_size = max(1, int(batch_size))
+    for start in range(0, len(items), batch_size):
+        yield items[start:start + batch_size]
+
+
+def _normalize_device_name(device_name):
+    device_name = str(device_name).strip()
+    if device_name.isdigit():
+        return f"cuda:{device_name}"
+    return device_name
+
+
+def _requested_devices(args):
+    if args.devices:
+        devices_arg = args.devices.strip()
+        if devices_arg.lower() == "all":
+            if torch.cuda.is_available():
+                return [f"cuda:{idx}" for idx in range(torch.cuda.device_count())]
+            return ["cpu"]
+        return [_normalize_device_name(dev) for dev in devices_arg.split(",") if dev.strip()]
+    return [_normalize_device_name(args.device)]
+
+
+def _resolve_device(requested_device):
+    requested_device = _normalize_device_name(requested_device)
+    if requested_device.startswith("cuda") and not torch.cuda.is_available():
+        print("CUDA was requested but is unavailable; using CPU.", flush=True)
+        requested_device = "cpu"
+    device = torch.device(requested_device)
+    if device.type == "cuda":
+        torch.cuda.set_device(device)
+    return device
+
+
+def _render_result(idx, frame_id, arr, pred_kps, gt_pose, out_dir, skeleton_only):
+    err = _mpjpe_cm(pred_kps, gt_pose)
+    if skeleton_only:
+        fig = make_skeleton_frame(pred_kps, gt_pose, frame_id, err)
+    else:
+        fig = make_frame(arr, pred_kps, gt_pose, frame_id, err)
+
+    # Save with zero-padded index so frames sort correctly for ffmpeg.
+    out_path = out_dir / f"{idx:05d}.png"
+    fig.savefig(str(out_path), dpi=100, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    return err
+
+
+def _process_frame_subset(
+    worker_id,
+    device_name,
+    frame_items,
+    config_path,
+    checkpoint_path,
+    out_dir,
+    batch_size,
+    skeleton_only,
+    seq_name,
+):
+    device = _resolve_device(device_name)
+    out_dir = Path(out_dir)
+    model, cfg = _load_model(config_path, checkpoint_path, device)
+    total = len(frame_items)
+    num_batches = int(math.ceil(total / max(1, batch_size))) if total else 0
+    print(
+        f"[worker {worker_id}] model loaded from {checkpoint_path} "
+        f"[device: {device}, frames: {total}, batch_size: {batch_size}]",
+        flush=True,
+    )
+
+    mpjpe_all = []
+    processed = 0
+    for batch_idx, batch_items in enumerate(_iter_batches(frame_items, batch_size), start=1):
+        batch_results = _infer_batch_npy(batch_items, model, cfg, device, seq_name)
+        for batch_item, batch_result in zip(batch_items, batch_results):
+            gt_pose = batch_item[3]
+            idx, frame_id, arr, pred_kps = batch_result
+            err = _render_result(idx, frame_id, arr, pred_kps, gt_pose, out_dir, skeleton_only)
+            if err is not None:
+                mpjpe_all.append(err)
+            processed += 1
+
+        if processed == total or batch_idx == 1 or processed % 50 == 0:
+            mean_err = f"{np.mean(mpjpe_all):.1f} cm" if mpjpe_all else "n/a"
+            print(
+                f"[worker {worker_id}] [{processed}/{total}] "
+                f"batch {batch_idx}/{num_batches} running_mean={mean_err}",
+                flush=True,
+            )
+
+    return {"worker_id": worker_id, "device": str(device), "count": total, "mpjpe": mpjpe_all}
+
+
+def _infer_frame_subset(
+    worker_id,
+    device_name,
+    frame_items,
+    config_path,
+    checkpoint_path,
+    batch_size,
+    seq_name,
+):
+    device = _resolve_device(device_name)
+    model, cfg = _load_model(config_path, checkpoint_path, device)
+    total = len(frame_items)
+    num_batches = int(math.ceil(total / max(1, batch_size))) if total else 0
+    print(
+        f"[worker {worker_id}] model loaded from {checkpoint_path} "
+        f"[device: {device}, frames: {total}, batch_size: {batch_size}]",
+        flush=True,
+    )
+
+    predictions = []
+    processed = 0
+    for batch_idx, batch_items in enumerate(_iter_batches(frame_items, batch_size), start=1):
+        batch_results = _infer_batch_npy(batch_items, model, cfg, device, seq_name)
+        for idx, frame_id, _, pred_kps in batch_results:
+            predictions.append((idx, frame_id, pred_kps))
+            processed += 1
+
+        if processed == total or batch_idx == 1 or processed % 50 == 0:
+            print(
+                f"[worker {worker_id}] inference [{processed}/{total}] "
+                f"batch {batch_idx}/{num_batches}",
+                flush=True,
+            )
+
+    return {
+        "worker_id": worker_id,
+        "device": str(device),
+        "count": total,
+        "predictions": predictions,
+    }
+
+
+def _collect_predictions(frame_items, devices, args, seq_name):
+    if len(devices) > 1:
+        shards = _split_round_robin(frame_items, len(devices))
+        jobs = [
+            (worker_id, device_name, shard)
+            for worker_id, (device_name, shard) in enumerate(zip(devices, shards))
+            if shard
+        ]
+        ctx = mp.get_context("spawn")
+        completed = 0
+        predictions = []
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=len(jobs),
+            mp_context=ctx,
+        ) as executor:
+            futures = [
+                executor.submit(
+                    _infer_frame_subset,
+                    worker_id,
+                    device_name,
+                    shard,
+                    args.config,
+                    args.checkpoint,
+                    args.batch_size,
+                    seq_name,
+                )
+                for worker_id, device_name, shard in jobs
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                completed += result["count"]
+                predictions.extend(result["predictions"])
+                print(
+                    f"[worker {result['worker_id']}] inference complete on "
+                    f"{result['device']} ({completed}/{len(frame_items)} total frames)",
+                    flush=True,
+                )
+    else:
+        result = _infer_frame_subset(
+            0,
+            devices[0],
+            frame_items,
+            args.config,
+            args.checkpoint,
+            args.batch_size,
+            seq_name,
+        )
+        predictions = result["predictions"]
+
+    predictions.sort(key=lambda item: item[0])
+    if len(predictions) != len(frame_items):
+        raise RuntimeError(
+            f"Collected {len(predictions)} predictions for {len(frame_items)} frames"
+        )
+    return predictions
+
+
+def _sosfiltfilt_padlen(sos):
+    ntaps = 2 * len(sos) + 1
+    ntaps -= min((sos[:, 2] == 0).sum(), (sos[:, 5] == 0).sum())
+    return 3 * ntaps
+
+
+def _smooth_keypoint_predictions(predictions, fps, cutoff_hz, order):
+    """Apply a zero-phase Butterworth low-pass filter to each keypoint axis."""
+    if not predictions:
+        return predictions
+    if fps <= 0:
+        raise ValueError("--fps must be > 0")
+    if cutoff_hz <= 0:
+        raise ValueError("--filter-cutoff-hz must be > 0")
+    if cutoff_hz >= fps / 2.0:
+        raise ValueError(
+            f"--filter-cutoff-hz must be below Nyquist ({fps / 2.0:.2f} Hz)"
+        )
+    if order < 1:
+        raise ValueError("--filter-order must be >= 1")
+
+    try:
+        from scipy.signal import butter, sosfiltfilt
+    except ImportError as exc:
+        raise RuntimeError(
+            "scipy is required for --smooth-keypoints; install scipy or run without smoothing"
+        ) from exc
+
+    num_frames = len(predictions)
+    num_keypoints = len(JOINT_NAMES)
+    coords = np.full((num_frames, num_keypoints, 3), np.nan, dtype=np.float64)
+    scores = np.full((num_frames, num_keypoints), np.nan, dtype=np.float64)
+    present = np.zeros((num_frames, num_keypoints), dtype=bool)
+
+    for frame_idx, (_, _, pred_kps) in enumerate(predictions):
+        for kp in pred_kps:
+            jid = int(kp[0])
+            if jid < 0 or jid >= num_keypoints:
+                continue
+            coords[frame_idx, jid] = [float(kp[1]), float(kp[2]), float(kp[3])]
+            scores[frame_idx, jid] = float(kp[4]) if len(kp) > 4 else 1.0
+            present[frame_idx, jid] = True
+
+    sos = butter(order, cutoff_hz, btype="lowpass", fs=fps, output="sos")
+    padlen = _sosfiltfilt_padlen(sos)
+    if num_frames <= padlen:
+        print(
+            f"Skipping Butterworth smoothing: need more than {padlen} frames, "
+            f"got {num_frames}.",
+            flush=True,
+        )
+        return predictions
+
+    time_idx = np.arange(num_frames)
+    filtered = coords.copy()
+    for jid in range(num_keypoints):
+        for axis in range(3):
+            values = coords[:, jid, axis]
+            valid = np.isfinite(values)
+            if valid.sum() < 2:
+                continue
+            if valid.sum() < num_frames:
+                values = np.interp(time_idx, time_idx[valid], values[valid])
+            filtered[:, jid, axis] = sosfiltfilt(sos, values)
+
+    smoothed = []
+    for frame_idx, (idx, frame_id, pred_kps) in enumerate(predictions):
+        smoothed_kps = []
+        original_by_id = {int(kp[0]): kp for kp in pred_kps}
+        for jid in sorted(original_by_id):
+            if jid < 0 or jid >= num_keypoints or not present[frame_idx, jid]:
+                continue
+            score = scores[frame_idx, jid]
+            if not np.isfinite(score):
+                score = original_by_id[jid][4] if len(original_by_id[jid]) > 4 else 1.0
+            x, y, z = filtered[frame_idx, jid]
+            smoothed_kps.append((jid, float(x), float(y), float(z), float(score)))
+        smoothed.append((idx, frame_id, smoothed_kps))
+
+    print(
+        f"Applied zero-phase Butterworth smoothing "
+        f"[fps={fps:g}, cutoff={cutoff_hz:g} Hz, order={order}]",
+        flush=True,
+    )
+    return smoothed
+
+
+def _render_prediction_sequence(frame_items, predictions, out_dir, skeleton_only, config_path):
+    pred_by_idx = {idx: pred_kps for idx, _, pred_kps in predictions}
+    cfg = None if skeleton_only else Config.fromfile(config_path)
+    mpjpe_all = []
+
+    for idx, frame_id, npy_path, gt_pose in frame_items:
+        pred_kps = pred_by_idx.get(idx, [])
+        arr = None if skeleton_only else _preprocess_npy(npy_path, cfg)
+        err = _render_result(idx, frame_id, arr, pred_kps, gt_pose, out_dir, skeleton_only)
+        if err is not None:
+            mpjpe_all.append(err)
+
+        if (idx + 1) % 50 == 0 or idx == 0 or idx == len(frame_items) - 1:
+            mean_err = f"{np.mean(mpjpe_all):.1f} cm" if mpjpe_all else "n/a"
+            if err is not None:
+                print(
+                    f"  [{idx+1}/{len(frame_items)}] frame {frame_id} "
+                    f"joints={len(pred_kps)} err={err:.1f} cm "
+                    f"running_mean={mean_err}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"  [{idx+1}/{len(frame_items)}] frame {frame_id} "
+                    f"joints={len(pred_kps)}",
+                    flush=True,
+                )
+
+    return mpjpe_all
+
+
+def _keypoints_for_json(keypoints):
+    return [
+        [int(kp[0]), float(kp[1]), float(kp[2]), float(kp[3]), float(kp[4])]
+        if len(kp) > 4 else
+        [int(kp[0]), float(kp[1]), float(kp[2]), float(kp[3])]
+        for kp in keypoints
+    ]
+
+
+def _pose_for_json(pose):
+    if pose is None:
+        return None
+    return [[float(x), float(y), float(z)] for x, y, z in pose]
+
+
+def _prediction_export_path(args, out_dir):
+    return Path(args.predictions_file) if args.predictions_file else out_dir / "predictions.json"
+
+
+def _save_prediction_export(
+    export_path,
+    frame_items,
+    raw_predictions,
+    smoothed_predictions,
+    args,
+    seq_name,
+):
+    raw_by_idx = {idx: pred_kps for idx, _, pred_kps in raw_predictions}
+    smooth_by_idx = (
+        {idx: pred_kps for idx, _, pred_kps in smoothed_predictions}
+        if smoothed_predictions is not None else None
+    )
+
+    frames = []
+    for idx, frame_id, npy_path, gt_pose in frame_items:
+        record = {
+            "index": int(idx),
+            "frame_id": frame_id,
+            "npy_path": npy_path,
+            "pred_keypoints": _keypoints_for_json(raw_by_idx.get(idx, [])),
+            "gt_pose": _pose_for_json(gt_pose),
+        }
+        if smooth_by_idx is not None:
+            record["smoothed_keypoints"] = _keypoints_for_json(smooth_by_idx.get(idx, []))
+        frames.append(record)
+
+    payload = {
+        "format_version": 1,
+        "sequence": seq_name,
+        "checkpoint": args.checkpoint,
+        "config": args.config,
+        "frame_count": len(frames),
+        "keypoint_names": JOINT_NAMES,
+        "prediction_columns": ["joint_id", "x", "y", "z", "score"],
+        "gt_pose_columns": ["x", "y", "z"],
+        "smoothing": {
+            "enabled": bool(smoothed_predictions is not None),
+            "fps": float(args.fps),
+            "cutoff_hz": float(args.filter_cutoff_hz),
+            "order": int(args.filter_order),
+            "method": "scipy.signal.butter(output='sos') + scipy.signal.sosfiltfilt",
+        },
+        "frames": frames,
+    }
+
+    export_path = Path(export_path)
+    export_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(export_path, "w") as f:
+        json.dump(payload, f, indent=2)
+    print(f"Saved predictions + GT to {export_path}", flush=True)
+
+
+def _split_round_robin(items, num_shards):
+    shards = [[] for _ in range(num_shards)]
+    for pos, item in enumerate(items):
+        shards[pos % num_shards].append(item)
+    return shards
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Visualize RT-Pose model predictions")
     group = parser.add_mutually_exclusive_group(required=True)
@@ -458,6 +905,22 @@ def parse_args():
     parser.add_argument("--out-dir", default=None,
         help="Output directory for PNGs. Default: <session_dir>/visualizations/")
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--devices", default=None,
+        help="Comma-separated devices for concurrent session processing, e.g. cuda:0,cuda:1,cuda:2,cuda:3. Use 'all' for all visible CUDA GPUs.")
+    parser.add_argument("--batch-size", type=int, default=8,
+        help="Number of frames per model forward on each device (default: 8).")
+    parser.add_argument("--smooth-keypoints", action="store_true",
+        help="Apply zero-phase Butterworth smoothing to predicted X/Y/Z keypoint coordinates before rendering")
+    parser.add_argument("--fps", type=float, default=30.0,
+        help="Frame rate used by --smooth-keypoints (default: 30)")
+    parser.add_argument("--filter-cutoff-hz", type=float, default=7.0,
+        help="Low-pass cutoff frequency in Hz for --smooth-keypoints (default: 7)")
+    parser.add_argument("--filter-order", type=int, default=4,
+        help="Butterworth filter order for --smooth-keypoints (default: 4)")
+    parser.add_argument("--save-predictions", action="store_true",
+        help="Save raw predictions and GT as JSON for offline post-processing")
+    parser.add_argument("--predictions-file", default=None,
+        help="Prediction JSON path. Default with --save-predictions: <out_dir>/predictions.json")
     parser.add_argument("--no-gt", action="store_true", help="Skip ground-truth overlay")
     parser.add_argument("--max-frames", type=int, default=None,
         help="Limit number of frames to process (useful for quick checks)")
@@ -470,10 +933,8 @@ def parse_args():
 
 def main():
     args = parse_args()
-
-    device = torch.device(args.device if torch.cuda.is_available() or not args.device.startswith("cuda") else "cpu")
-    model, cfg = _load_model(args.config, args.checkpoint, device)
-    print(f"Model loaded from {args.checkpoint}  [device: {device}]")
+    if args.batch_size < 1:
+        raise ValueError("--batch-size must be >= 1")
 
     # --- Collect frames ---
     frames = []   # list of (frame_id, npy_path, gt_pose_or_None)
@@ -520,32 +981,114 @@ def main():
         frames = frames[: args.max_frames]
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Processing {len(frames)} frames → {out_dir}")
+    frame_items = [
+        (idx, frame_id, npy_path, gt_pose)
+        for idx, (frame_id, npy_path, gt_pose) in enumerate(frames)
+    ]
+
+    devices = _requested_devices(args)
+    if not devices:
+        devices = [_normalize_device_name(args.device)]
+    if args.npy_file and len(devices) > 1:
+        print(f"Single-frame mode uses one device; using {devices[0]}.")
+        devices = devices[:1]
+    if len(frame_items) < len(devices):
+        devices = devices[:len(frame_items)]
+
+    device_label = ", ".join(devices)
+    print(
+        f"Processing {len(frames)} frames -> {out_dir} "
+        f"[devices: {device_label}, batch_size: {args.batch_size}]"
+    )
 
     mpjpe_all = []
+    should_save_predictions = args.save_predictions or args.predictions_file is not None
+    if args.smooth_keypoints or should_save_predictions:
+        raw_predictions = _collect_predictions(frame_items, devices, args, seq_name)
+        render_predictions = raw_predictions
+        smoothed_predictions = None
 
-    for idx, (frame_id, npy_path, gt_pose) in enumerate(frames):
-        arr, pred_kps = _infer_single_npy(npy_path, model, cfg, device, frame_id, seq_name)
+        if args.smooth_keypoints:
+            smoothed_predictions = _smooth_keypoint_predictions(
+                raw_predictions,
+                fps=args.fps,
+                cutoff_hz=args.filter_cutoff_hz,
+                order=args.filter_order,
+            )
+            render_predictions = smoothed_predictions
 
-        err = _mpjpe_cm(pred_kps, gt_pose)
-        if err is not None:
-            mpjpe_all.append(err)
+        if should_save_predictions:
+            _save_prediction_export(
+                _prediction_export_path(args, out_dir),
+                frame_items,
+                raw_predictions,
+                smoothed_predictions,
+                args,
+                seq_name,
+            )
 
-        if args.skeleton_only:
-            fig = make_skeleton_frame(pred_kps, gt_pose, frame_id, err)
-        else:
-            fig = make_frame(arr, pred_kps, gt_pose, frame_id, err)
-        # Save with zero-padded index so frames sort correctly for ffmpeg
-        out_path = out_dir / f"{idx:05d}.png"
-        fig.savefig(str(out_path), dpi=100, bbox_inches="tight", facecolor=fig.get_facecolor())
-        plt.close(fig)
-
-        if (idx + 1) % 50 == 0 or idx == 0:
-            mean_err = f"{np.mean(mpjpe_all):.1f} cm" if mpjpe_all else "n/a"
-            print(f"  [{idx+1}/{len(frames)}]  frame {frame_id}  "
-                  f"joints={len(pred_kps)}  err={err:.1f} cm  running_mean={mean_err}"
-                  if err is not None else
-                  f"  [{idx+1}/{len(frames)}]  frame {frame_id}  joints={len(pred_kps)}")
+        render_label = "smoothed" if args.smooth_keypoints else "raw"
+        print(
+            f"Rendering {len(render_predictions)} {render_label} frames -> {out_dir}",
+            flush=True,
+        )
+        mpjpe_all = _render_prediction_sequence(
+            frame_items,
+            render_predictions,
+            out_dir,
+            args.skeleton_only,
+            args.config,
+        )
+    elif len(devices) > 1:
+        shards = _split_round_robin(frame_items, len(devices))
+        jobs = [
+            (worker_id, device_name, shard)
+            for worker_id, (device_name, shard) in enumerate(zip(devices, shards))
+            if shard
+        ]
+        ctx = mp.get_context("spawn")
+        completed = 0
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=len(jobs),
+            mp_context=ctx,
+        ) as executor:
+            futures = [
+                executor.submit(
+                    _process_frame_subset,
+                    worker_id,
+                    device_name,
+                    shard,
+                    args.config,
+                    args.checkpoint,
+                    str(out_dir),
+                    args.batch_size,
+                    args.skeleton_only,
+                    seq_name,
+                )
+                for worker_id, device_name, shard in jobs
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                completed += result["count"]
+                mpjpe_all.extend(result["mpjpe"])
+                print(
+                    f"[worker {result['worker_id']}] complete on {result['device']} "
+                    f"({completed}/{len(frame_items)} total frames)",
+                    flush=True,
+                )
+    else:
+        result = _process_frame_subset(
+            0,
+            devices[0],
+            frame_items,
+            args.config,
+            args.checkpoint,
+            str(out_dir),
+            args.batch_size,
+            args.skeleton_only,
+            seq_name,
+        )
+        mpjpe_all.extend(result["mpjpe"])
 
     print(f"\nDone. {len(frames)} frames saved to {out_dir}")
     if mpjpe_all:

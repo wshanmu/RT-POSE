@@ -366,10 +366,24 @@ class AssignLabelPose2(object):
         if 'rdr_cube' in res:
             rdr_res = {}
             rdr_tensor = res['rdr_cube']
+            temporal_cfg = getattr(info.DATASET, 'TEMPORAL', {})
+            temporal_enabled = bool(temporal_cfg.get('ENABLED', False)) if hasattr(temporal_cfg, 'get') else False
             if len(rdr_tensor.shape) < 4:
                 rdr_tensor = np.expand_dims(rdr_tensor, axis=0) # (1, Z, Y, X)
             elif len(rdr_tensor.shape) > 4:
-                rdr_tensor = rdr_tensor.reshape(-1, *list(rdr_tensor.shape)[2:]) #  (2, D, Z, Y, X)-> (2D, Z, Y, X)
+                if temporal_enabled:
+                    if len(rdr_tensor.shape) == 5:
+                        pass  # (T, D, Z, Y, X)
+                    elif len(rdr_tensor.shape) == 6:
+                        rdr_tensor = rdr_tensor.reshape(
+                            rdr_tensor.shape[0], -1, *list(rdr_tensor.shape)[3:]
+                        )  # (T, 2, D, Z, Y, X) -> (T, 2D, Z, Y, X)
+                    else:
+                        raise ValueError(
+                            f"Unsupported temporal radar tensor shape: {rdr_tensor.shape}"
+                        )
+                else:
+                    rdr_tensor = rdr_tensor.reshape(-1, *list(rdr_tensor.shape)[2:]) #  (2, D, Z, Y, X)-> (2D, Z, Y, X)
             rdr_res.update(rdr_tensor=rdr_tensor)
         if 'lidar' in res:
             lidar_res = {}
