@@ -21,3 +21,5 @@ apex
 *.jpg
 tmp*
 *.onnx
+/*trt
+*.npz
