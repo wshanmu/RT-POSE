@@ -21,5 +21,7 @@ apex
 *.jpg
 tmp*
 *.onnx
+/*trt
+*.npz
 viz_*/*
 *.mp4
