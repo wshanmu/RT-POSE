@@ -138,16 +138,11 @@ cd /data1/shanmu/ai-fitness-coach/RT-POSE
 
 python tools/custom_make_session_split.py \
   --root-dir ../ssd_datas/fitness_data/synchronized \
-  --train-sessions boelter_closer_session1 boelter_closer_session2 \
-                   boelter_closer_session4 boelter_closer_session7 \
-                   boelter_closer_session8 boelter_closer_session10 \
-                   boelter_closer_session11 boelter_closer_session13 \
-                   boelter_closer_session14 boelter_closer_session16 \
-                   boelter_session17 boelter_session19 boelter_session21 \
-                   boelter_closer_session_ft_1 \
-  --eval-sessions  boelter_closer_session3 boelter_closer_session6 \
-                   boelter_closer_session9 boelter_closer_session12 \
-                   boelter_closer_session15 boelter_session20 boelter_session18 \
+  --train-sessions boelter_loc1_session_1 boelter_loc1_session_2 \
+                   boelter_loc1_session_4 boelter_loc1_session_5 \
+                   boelter_loc2_session_1 boelter_loc2_session_2 \
+                   boelter_loc2_session_4 boelter_loc2_session_5 \
+  --eval-sessions  boelter_loc1_session_3 boelter_loc2_session_3 \
   --session-label Train.json
 ```
 
@@ -193,10 +188,10 @@ Pass any field as a trailing positional override on the command line
 ```bash
 cd /data1/shanmu/ai-fitness-coach/RT-POSE
 
-CUDA_VISIBLE_DEVICES=1  \
+CUDA_VISIBLE_DEVICES=0  \
 PYTHONPATH=. RTPOSE_DISABLE_IOU3D=1 RTPOSE_DISABLE_SPCONV=1 \
 RTPOSE_DATA_ROOT=../ssd_datas/fitness_data/synchronized \
-python tools/train.py configs/custom_fitness/hr3d_one_hm_23j_dzyx_leaveout.py \
+python tools/train.py configs/custom_fitness_body18/hr3d_one_hm_18j_dzyx_leaveout.py \
 training.lr_max=0.0003 training.batch_size=128
 ```
 
