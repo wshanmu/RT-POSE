@@ -1,3 +1,118 @@
+# Start training RT-POSE with the collected data
+
+## 1. Extract sync videos and radar
+In `batch_postprocess.py`, change:
+```python
+scripts_to_run = [
+        "pose_recording/extract_sync_data_allWebcam.py",
+    ]
+```
+Then run:
+```bash
+python /pose_recording/batch_postprocess.py --continue_on_error --exp_names [the session names]
+python /pose_recording/batch_postprocess.py --continue_on_error --pattern [the session pattern, e.g., "boelter_loc1_session_*"]
+```
+This will extract synced videos and radar frames.
+
+## 2. Estimate 3D ground truth from the videos
+Run the following to estimate 3D skeleton
+```bash
+conda run --no-capture-output -n freemocap python skeleton-preprocessing/skeleton-preprocessing/preprocess.py   --freemocap_session ssd_datas/fitness_data/synchronized/test_movement_0629   --freemocap_calibration_toml /data1/shanmu/ai-fitness-coach/ssd_datas/fitness_data/synchronized/extrinsics_boelter_loc2_0629/cameras/cameras_camera_calibration.toml   --freemocap_run_vitpose   --freemocap_skeleton_3d   --freemocap_smooth_skeleton_3d   --freemocap_vitpose_gpu_ids 0,1,2,3  --freemocap_vitpose_camera_workers 4   --overwrite
+```
+This script also supports `pattern` mode:
+```bash
+conda run --no-capture-output -n freemocap python skeleton-preprocessing/skeleton-preprocessing/preprocess.py   --freemocap_session_pattern "test_movement_printer_loc*"   --freemocap_calibration_toml /data1/shanmu/ai-fitness-coach/ssd_datas/fitness_data/synchronized/extrinsics_printer_loc2/cameras/cameras_camera_calibration.toml   --freemocap_run_vitpose   --freemocap_skeleton_3d   --freemocap_smooth_skeleton_3d   --freemocap_vitpose_gpu_ids 0,1,2,3  --freemocap_vitpose_camera_workers 4   --overwrite   --yes
+```
+(using the same extrinsic calibration file)
+
+If the `config.yaml` file already specify the correct path to the calibration file, run the following to automatically extract that calibration path:
+```bash
+conda run --no-capture-output -n freemocap python skeleton-preprocessing/skeleton-preprocessing/preprocess.py \
+  --freemocap_session_pattern "printer_room_loc*" \
+  --freemocap_run_vitpose \
+  --freemocap_skeleton_3d \
+  --freemocap_smooth_skeleton_3d \
+  --freemocap_vitpose_gpu_ids 0,1,2,3 \
+  --freemocap_vitpose_camera_workers 4 \
+  --overwrite
+```
+
+## 3. Get 4D radar frame and the corresponding ground truth label
+Change the following in `batch_postprocess.py`:
+```python
+    scripts_to_run = [
+        "mmWaveRadar/get_4D_tensor.py",
+        "mmWaveRadar/get_ground_truth_label_3D.py",
+    ]
+```
+The `get_4D_tensor.py` generates and saves a `(128, 16, 8, 64)` shape tensor per frame in the cartersian system
+
+The `get_ground_truth_3D.py` generate the json file with ground truth labels that suits the RT-POSE training pipeline
+
+Note that current `get_ground_truth_3D.py` only supports 1 person, so if multiple person are detected by Step 2, we filter and keep the one that is within range depth from 0.8 m to 3.5 m, lateral range from -1.0m to 1.0m. The filetering can be changed by changing the default values in the script.
+
+## 4. Generate the combined json file for training and evaluation:
+An example:
+```bash
+cd /data1/shanmu/ai-fitness-coach/RT-POSE
+
+python tools/custom_make_session_split.py \
+  --root-dir ../ssd_datas/fitness_data/synchronized \
+  --train-sessions \
+                   boelter_loc1_session_1 \
+                   boelter_loc1_session_2 \
+                   boelter_loc1_session_3 \
+                   boelter_loc1_session_4 \
+                   boelter_loc1_session_5 \
+                   boelter_loc2_session_1 \
+                   boelter_loc2_session_2 \
+                   boelter_loc2_session_3 \
+                   boelter_loc2_session_4 \
+                   boelter_loc2_session_5 \
+                   boelter_loc2_session_6 \
+                   boelter_loc2_session_7 \
+                   boelter_loc2_session_8 \
+                   boelter_loc2_session_9 \
+                   boelter_loc2_session_10 \
+  --eval-sessions  printer_room_loc1_session_1 \
+                   printer_room_loc1_session_2 \
+                   printer_room_loc1_session_3 \
+                   printer_room_loc1_session_4 \
+                   printer_room_loc1_session_5 \
+  --session-label Train.json \
+  --out-dir leave_out_printer_eval_printer_loc1
+```
+
+This writes:
+
+```text
+<DATA_ROOT>/leave_out_printer_eval_printer_loc1/train_sessions.json
+<DATA_ROOT>/leave_out_printer_eval_printer_loc1/eval_sessions.json
+```
+
+## 5. Train the model:
+Change the data path in the `RT-POSE/configs/custom_fitness_body18/hr3d_one_hm_18j_dzyx_leaveout.py`
+
+and if needed, change the wandb configurations in `RT-POSE/configs/hydra/train.yaml`
+
+Then start the model training by running:
+```bash
+cd /data1/shanmu/ai-fitness-coach/RT-POSE
+
+CUDA_VISIBLE_DEVICES=2  \
+PYTHONPATH=. RTPOSE_DISABLE_IOU3D=1 RTPOSE_DISABLE_SPCONV=1 \
+RTPOSE_DATA_ROOT=../ssd_datas/fitness_data/synchronized \
+python tools/train.py configs/custom_fitness_body18/hr3d_one_hm_18j_dzyx_leaveout.py \
+training.lr_max=0.0003 training.batch_size=128 \
+RTPOSE_PRETRAINED=work_dirs/hr3d_one_hm_18j_dzyx_leaveout/polar4d/epoch_35.pth
+```
+The `RTPOSE_PRETRAINED` does not really needed.
+
+## 6. Visualize the evlauation results:
+Run `RT-POSE/tools/visualize_session_3D.py`. See the running commands in the script.
+
+
+
 # Training RT-Pose On The Custom Fitness Radar Dataset
 
 This note explains how to train and evaluate the modified RT-Pose code on the
