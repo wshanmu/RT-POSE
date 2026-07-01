@@ -138,12 +138,29 @@ cd /data1/shanmu/ai-fitness-coach/RT-POSE
 
 python tools/custom_make_session_split.py \
   --root-dir ../ssd_datas/fitness_data/synchronized \
-  --train-sessions boelter_loc1_session_1 boelter_loc1_session_2 \
-                   boelter_loc1_session_4 boelter_loc1_session_5 \
-                   boelter_loc2_session_1 boelter_loc2_session_2 \
-                   boelter_loc2_session_4 boelter_loc2_session_5 \
-  --eval-sessions  boelter_loc1_session_3 boelter_loc2_session_3 \
-  --session-label Train.json
+  --train-sessions \
+                   boelter_loc1_session_1 \
+                   boelter_loc1_session_2 \
+                   boelter_loc1_session_3 \
+                   boelter_loc1_session_4 \
+                   boelter_loc1_session_5 \
+                   boelter_loc2_session_1 \
+                   boelter_loc2_session_2 \
+                   boelter_loc2_session_3 \
+                   boelter_loc2_session_4 \
+                   boelter_loc2_session_5 \
+                   boelter_loc2_session_6 \
+                   boelter_loc2_session_7 \
+                   boelter_loc2_session_8 \
+                   boelter_loc2_session_9 \
+                   boelter_loc2_session_10 \
+  --eval-sessions  printer_room_loc1_session_1 \
+                   printer_room_loc1_session_2 \
+                   printer_room_loc1_session_3 \
+                   printer_room_loc1_session_4 \
+                   printer_room_loc1_session_5 \
+  --session-label Train.json \
+  --out-dir leave_out_printer_eval_printer_loc1
 ```
 
 This writes:
@@ -188,11 +205,12 @@ Pass any field as a trailing positional override on the command line
 ```bash
 cd /data1/shanmu/ai-fitness-coach/RT-POSE
 
-CUDA_VISIBLE_DEVICES=0  \
+CUDA_VISIBLE_DEVICES=2  \
 PYTHONPATH=. RTPOSE_DISABLE_IOU3D=1 RTPOSE_DISABLE_SPCONV=1 \
 RTPOSE_DATA_ROOT=../ssd_datas/fitness_data/synchronized \
 python tools/train.py configs/custom_fitness_body18/hr3d_one_hm_18j_dzyx_leaveout.py \
-training.lr_max=0.0003 training.batch_size=128
+training.lr_max=0.0003 training.batch_size=128 \
+RTPOSE_PRETRAINED=work_dirs/hr3d_one_hm_18j_dzyx_leaveout/polar4d/epoch_35.pth
 ```
 
 ### 5.3 Multi-GPU (torchrun)

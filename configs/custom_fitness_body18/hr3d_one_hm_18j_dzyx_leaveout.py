@@ -11,9 +11,9 @@ data['train']['cfg']['DATASET'] = DATASET
 data['val']['cfg']['DATASET'] = DATASET
 data['test']['cfg']['DATASET'] = DATASET
 
-data['train']['label_file'] = os.environ.get('RTPOSE_TRAIN_LABEL', 'splits/train_sessions.json')
-data['val']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'splits/eval_sessions.json')
-data['test']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'splits/eval_sessions.json')
+data['train']['label_file'] = os.environ.get('RTPOSE_TRAIN_LABEL', 'leave_out_printer_eval_printer_loc1/train_sessions.json')
+data['val']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'leave_out_printer_eval_printer_loc1/eval_sessions.json')
+data['test']['label_file'] = os.environ.get('RTPOSE_EVAL_LABEL', 'leave_out_printer_eval_printer_loc1/eval_sessions.json')
 
 # A 23-joint checkpoint has an incompatible regression head for BODY_18 labels.
 load_from = os.environ.get('RTPOSE_LOAD_FROM', None)

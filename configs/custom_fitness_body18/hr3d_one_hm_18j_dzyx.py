@@ -1,4 +1,5 @@
 import itertools
+import os
 import numpy as np
 
 BATCH_SIZE = 64
@@ -195,6 +196,8 @@ work_dir = './work_dirs/{}/'.format(__file__[__file__.rfind('/') + 1:-3])
 load_from = None
 resume_from = None
 workflow = [('train', 1)]
+
+model["pretrained"] = os.environ.get("RTPOSE_PRETRAINED", None)
 
 cuda_device = '0'
 enable_amp = False
